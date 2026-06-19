@@ -1,0 +1,25 @@
+# ── Environments / caches (heavy, machine-specific) ──
+.venv/
+.venv-bge/
+.hf-cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── OS ──
+.DS_Store
+
+# ── Generated outputs (may embed parsed sensitive data) ──
+out/
+*.jsonl
+*.index.json
+
+# ── Sensitive: real company source documents & data ──
+test_doc_excel/
+
+# ── Sensitive: docs/plans/tests embedding real names, IPs, internal data ──
+# (push code only; design docs kept local)
+*.md
+!README.md
+plans/
+tests/test_backend_recall.py
