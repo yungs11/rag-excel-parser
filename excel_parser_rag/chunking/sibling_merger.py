@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from ..textutil import PARSER_VERSION, one_line, range_a1, stable_id
 from .chunk_schema import RagChunk
+from .hierarchy_pack import assign_parts, pack
 
 
 def _region_id(c: RagChunk) -> Any:
@@ -166,26 +167,12 @@ def merge_sibling_rules(chunks: List[RagChunk], *, max_chars: int = 1100) -> Lis
     def flush() -> None:
         if not run:
             return
-        # run 을 캡 단위 subgroup 으로 분할
-        subgroups: List[List[RagChunk]] = []
-        cur: List[RagChunk] = []
-        for c in run:
-            if cur and len(_compose_content(cur + [c])) <= max_chars:
-                cur.append(c)
-            else:
-                if cur:
-                    subgroups.append(cur)
-                cur = [c]
-        if cur:
-            subgroups.append(cur)
-        total_parts = sum(1 for g in subgroups if len(g) >= 2)
-        part = 0
-        for g in subgroups:
+        subgroups = pack(list(run), measure=lambda g: len(_compose_content(g)), max_chars=max_chars)
+        for g, part_index, part_total in assign_parts(subgroups, multi_only=True):
             if len(g) == 1:
                 out.append(g[0])  # 단일 행 → 원본 그대로 (불변)
             else:
-                part += 1
-                out.append(_build_merged(g, part, total_parts))
+                out.append(_build_merged(g, part_index, part_total))
         run.clear()
 
     for c in chunks:
