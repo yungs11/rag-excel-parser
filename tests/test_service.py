@@ -225,3 +225,17 @@ def test_get_job_not_found(client):
 def test_cancel_job_not_found(client):
     resp = client.delete("/parse/jobs/nonexistent456")
     assert resp.status_code == 404
+
+
+def test_info_default_backend_is_auto():
+    """env(EXCEL_PARSER_BACKEND) 미설정 시 기본 백엔드가 정확히 'auto' 여야 한다."""
+    import os
+    if os.environ.get("EXCEL_PARSER_BACKEND"):
+        import pytest
+        pytest.skip("EXCEL_PARSER_BACKEND env 가 설정되어 기본값 검증 불가")
+    from service import main as svc
+    assert svc._BACKEND == "auto"
+    from fastapi.testclient import TestClient
+    with TestClient(svc.app) as client:
+        body = client.get("/info").json()
+        assert body["backend"] == "auto"
