@@ -46,7 +46,7 @@ _ALLOWED_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 #   EXCEL_PARSER_BACKEND : "kordoc"(기본) | "openpyxl"
 #   KORDOC_BIN           : kordoc CLI (예: "node /tmp/kordoc/dist/cli.js") — md 자동생성
 #   KORDOC_MD_OUT        : 자동생성 md 저장 디렉토리 (기본 임시)
-_BACKEND = os.environ.get("EXCEL_PARSER_BACKEND", "kordoc")
+_BACKEND = os.environ.get("EXCEL_PARSER_BACKEND", "auto")
 _KORDOC_BIN = os.environ.get("KORDOC_BIN")
 _KORDOC_MD_OUT = os.environ.get("KORDOC_MD_OUT")
 

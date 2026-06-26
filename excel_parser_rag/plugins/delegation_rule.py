@@ -120,7 +120,12 @@ class DelegationRulePlugin(ParserPlugin):
         out.extend(
             self._build_delegation_rows(region, canvas, ctx, row_paths, note_rows)
         )
-        return out
+        # delegation_rule 만 형제 병합; 비-delegation 청크는 merge_sibling_rules 가 통과시킴.
+        from ..chunking.sibling_merger import merge_sibling_rules
+
+        config = getattr(ctx, "config", None)
+        max_chars = getattr(config, "delegation_merge_max_chars", 1100) if config is not None else 1100
+        return merge_sibling_rules(out, max_chars=max_chars)
 
     # ------------------------------------------------------- matrix_fact 보강
     def _annotate_matrix_fact(self, chunk: RagChunk) -> None:

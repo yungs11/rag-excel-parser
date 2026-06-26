@@ -9,6 +9,9 @@ from .base import Backend, BackendError
 
 def get_backend(name: str) -> Backend:
     name = (name or "kordoc").lower()
+    if name == "auto":
+        from .auto_backend import AutoBackend
+        return AutoBackend()
     if name == "openpyxl":
         from .openpyxl_backend import OpenpyxlBackend
         return OpenpyxlBackend()

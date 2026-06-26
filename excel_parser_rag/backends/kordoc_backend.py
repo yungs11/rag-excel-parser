@@ -587,6 +587,10 @@ class KordocBackend:
             all_chunks.extend(_build(doc, sheet, sheet_title, anchors, covered, nrows, kncols, k2o))
             sheets_done += 1
 
+        # 십진번호(WBS) 계층 병합 — self-gating(번호 필드 없으면 무변화)
+        from ..chunking.wbs_merger import merge_wbs_rows
+        all_chunks = merge_wbs_rows(all_chunks, max_chars=config.numbering_merge_max_chars)
+
         ct = Counter(c["chunk_type"] for c in all_chunks)
         rt = Counter(c["region_type"] for c in all_chunks)
         confs = [c["quality"]["confidence"] for c in all_chunks] or [0.0]
