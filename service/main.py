@@ -35,6 +35,7 @@ from excel_parser_rag import PARSER_VERSION
 from excel_parser_rag.backends import get_backend
 from excel_parser_rag.chunking.chunk_schema import CHUNK_TYPES
 from excel_parser_rag.config import DEFAULT_CHUNK_PROFILES, ParserConfig
+from excel_parser_rag.gate import compute_gate_summary
 from excel_parser_rag.loaders.xls_converter import find_soffice
 from service.jobs import JobStore
 
@@ -118,6 +119,11 @@ def _run_parse(file_bytes: bytes, filename: str, config: ParserConfig, *, file_s
         t0 = time.monotonic()
         chunks, stats = get_backend(config.backend).parse(tmp_path, config)
         timing_ms = round((time.monotonic() - t0) * 1000, 1)
+        try:
+            stats["gate_summary"] = compute_gate_summary(tmp_path, chunks)
+        except Exception as exc:  # noqa: BLE001
+            # gate 계산 실패는 보수적 차단(ok=False) — spec §8 "추출 불가 = 적재 불가"
+            stats["gate_summary"] = {"ok": False, "sheets": [], "error": str(exc)}
     finally:
         tmp_path.unlink(missing_ok=True)
     return {
