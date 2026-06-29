@@ -1,5 +1,4 @@
 import pathlib
-import pytest
 from excel_parser_rag.gate.excel_gate import compute_gate_summary
 from excel_parser_rag.pipeline import parse_excel_for_rag
 
@@ -14,10 +13,10 @@ def _summ(path):
 
 
 def _codes(summary, sheet_substr):
-    for s in summary["sheets"]:
-        if sheet_substr in s["sheet"]:
-            return {f["code"] for f in s["findings"]}
-    return set()
+    # 음성 단언(예: side_by_side not in ...)에서 시트명 오타로 trivially-pass 되는 걸 막는다.
+    match = [s for s in summary["sheets"] if sheet_substr in s["sheet"]]
+    assert match, f"No sheet matching {sheet_substr!r}"
+    return {f["code"] for f in match[0]["findings"]}
 
 
 def test_side_by_side_blocks_beoplyeong():

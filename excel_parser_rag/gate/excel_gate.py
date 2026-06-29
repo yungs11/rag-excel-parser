@@ -86,19 +86,30 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
     for region, canvas in region_pairs:
         by_sheet[canvas.sheet_name].append((region, canvas))
 
-    # 원시 워크북(참조오류 스캔용)
+    # 원시 워크북(참조오류 스캔용).
+    #  - data_only=True : 캐시된 계산 결과의 에러 문자열(#REF! 등)
+    #  - data_only=False: 수식 문자열 자체의 깨진 참조(=SUM(#REF!) 등) — 캐시가 없을 때도 잡는다.
     wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        wb_formula = openpyxl.load_workbook(path)  # 기본=수식 보존
+    except Exception:
+        wb_formula = None
 
     sheets_out: List[Dict[str, Any]] = []
     for ws in wb.worksheets:
         findings: List[Dict[str, Any]] = []
 
-        # 1) ref_error — 모든 셀 스캔
-        ref_cells: List[str] = []
-        for row in ws.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, str) and ERROR_RE.search(cell.value):
-                    ref_cells.append(f"{get_column_letter(cell.column)}{cell.row}")
+        # 1) ref_error — 값(캐시) + 수식 문자열 양쪽 스캔
+        ref_set: set = set()
+        ws_f = wb_formula[ws.title] if (wb_formula is not None and ws.title in wb_formula.sheetnames) else None
+        for src_ws in (ws, ws_f):
+            if src_ws is None:
+                continue
+            for row in src_ws.iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str) and ERROR_RE.search(cell.value):
+                        ref_set.add((cell.row, cell.column))
+        ref_cells = [f"{get_column_letter(c)}{r}" for r, c in sorted(ref_set)]
         if ref_cells:
             findings.append({"code": "ref_error", "cells": ref_cells[:20],
                              "detail": f"참조 오류가 값에 포함됨: {', '.join(ref_cells[:5])}"})
@@ -115,9 +126,11 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
                 involved = sorted({seq[cols.index(c)] for c in sbs_cols})
                 findings.append({"code": "side_by_side", "cells": dup_cells,
                                  "detail": f"나란히 놓인 두 표로 판단(중복/반복 헤더: {', '.join(involved)})"})
-            # empty_header: 사용 열에 헤더 라벨이 비어있는 칸
-            # 임계치: 전체 region 열 중 빈 헤더 비율이 50% 초과인 경우만 플래그
-            # (trailing blank columns 오탐 방지 — 뒤쪽 빈 열은 무시)
+            # empty_header: 사용 열에 헤더 라벨이 비어있는 칸.
+            # ⚠️ 의도적으로 거의 비활성(보수적): region 이 잡혔다는 건 보통 라벨 ≥2 이므로
+            #   아래 `len(labels) < 2` 게이트로 실질적 미발화. trailing blank column 오탐을
+            #   피하려는 스캐폴딩이며, 추후 명확한 트리거 정의가 생기면 완화한다.
+            # 임계치: 전체 region 열 중 빈 헤더 비율 50% 초과 AND 라벨<2 일 때만.
             total_cols = region.max_col - region.min_col + 1
             empty_cols = [get_column_letter(col) + str(region.header_rows[0])
                           for col in range(region.min_col, region.max_col + 1) if col not in labels]
@@ -146,4 +159,6 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
         sheets_out.append({"sheet": ws.title, "ok": not findings, "findings": findings})
 
     wb.close()
+    if wb_formula is not None:
+        wb_formula.close()
     return {"ok": all(s["ok"] for s in sheets_out), "sheets": sheets_out}
