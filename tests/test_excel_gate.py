@@ -56,3 +56,31 @@ def test_wijum_passes_for_now():
     s = _summ(EXCEL / "2-1. 위임전결기준표(2026.04.17. 개정).xlsx")
     # 향후 고도화 전까지 통과(매트릭스 미차단)
     assert _codes(s, "위임전결") == set()
+
+
+# ── side_by_side 정밀화 회귀 (index중복 OR ≥2 distinct 라벨블록 비겹침 반복만) ──
+
+def test_side_by_side_flags_nac():
+    # NAC연계: [시스템,방식] 하위컬럼이 업무망/인터넷망 두 표로 좌우 반복 → 차단
+    s = _summ(MARK / "신한자산신탁_자산목록_v20251013.xlsx")
+    assert "side_by_side" in _codes(s, "NAC연계")
+
+
+def test_no_false_positive_jeonche_jasan():
+    # 전체자산: 한 표에 HOSTNAME류 동명 컬럼 → side_by_side 아님
+    s = _summ(MARK / "신한자산신탁_자산목록_v20251013.xlsx")
+    assert "side_by_side" not in _codes(s, "전체자산")
+
+
+def test_no_false_positive_access_matrix():
+    # 접근제어_조사: 사람별 열 매트릭스(같은 라벨 인접 반복) → side_by_side 아님
+    s = _summ(MARK / "신한자산신탁_자산목록_v20251013.xlsx")
+    assert "side_by_side" not in _codes(s, "접근제어_조사")
+
+
+def test_jasan_file_blocks_due_to_nac_only():
+    # 파일 단위 차단(사용자 결정): NAC연계 때문에 파일 ok=False, 차단 시트는 NAC연계뿐.
+    s = _summ(MARK / "신한자산신탁_자산목록_v20251013.xlsx")
+    assert s["ok"] is False
+    blocked = [sh["sheet"] for sh in s["sheets"] if not sh["ok"]]
+    assert blocked == ["NAC연계"]

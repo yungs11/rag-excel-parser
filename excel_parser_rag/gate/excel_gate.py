@@ -18,6 +18,47 @@ from ..config import ParserConfig
 from ..pipeline import build_canvases, detect_and_classify
 
 ERROR_RE = re.compile(r"#(REF|VALUE|DIV/0|N/A|NAME\?|NULL|NUM)!?")
+# 인덱스열 라벨(나란히 놓인 독립 표 각각의 행번호 열) — 중복 시 side_by_side 강신호
+_INDEX_RE = re.compile(r"^(순번|연번|번호|no\.?|#|seq|id)$", re.IGNORECASE)
+
+
+def _detect_side_by_side(labels: Dict[int, str]):
+    """나란히 놓인 두 표 판정 → 관련 컬럼 set.
+    (A) 인덱스열(순번/No 등) 라벨이 2회 이상 등장, 또는
+    (B) ≥2개 라벨로 된 연속 블록이 헤더행에서 통째로 반복.
+    단순 단일 비인덱스 라벨 1회 중복(한 표의 동명 컬럼)이나 매트릭스(사람별 열)는 제외.
+    """
+    ordered = sorted(labels.items())  # [(col, label), ...] 열 순서
+    cols = [c for c, _ in ordered]
+    seq = [lab for _, lab in ordered]
+    sbs_cols: set = set()
+    counts = Counter(seq)
+    # (A) 인덱스열 중복
+    for c, lab in ordered:
+        if _INDEX_RE.match(lab.strip()) and counts[lab] > 1:
+            sbs_cols.add(c)
+    # (B) ≥2개 'distinct' 라벨로 된 블록이 비겹침으로 2회 이상 반복.
+    #     - distinct 조건: 매트릭스의 '같은 라벨 인접 반복'(이석영,이석영 / 박은희,박은희)을 제외.
+    #     - 비겹침 2회: 두 표가 좌우로 나란히 같은 하위컬럼(시스템,방식 …)을 갖는 구조(NAC연계).
+    n = len(seq)
+    for L in range(2, n // 2 + 1):
+        windows: Dict[tuple, List[int]] = {}
+        for s in range(0, n - L + 1):
+            windows.setdefault(tuple(seq[s:s + L]), []).append(s)
+        for blk, starts in windows.items():
+            if len(set(blk)) < 2:  # 블록 내 라벨이 모두 같으면(매트릭스 셀) 제외
+                continue
+            chosen: List[int] = []
+            last = -1
+            for s in starts:
+                if s > last:           # 비겹침 점유
+                    chosen.append(s)
+                    last = s + L - 1
+            if len(chosen) >= 2:
+                for s in chosen:
+                    for off in range(L):
+                        sbs_cols.add(cols[s + off])
+    return sbs_cols, cols, seq
 
 
 def _header_labels(region, canvas) -> Dict[int, str]:
@@ -67,13 +108,13 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
             labels = _header_labels(region, canvas)
             if not labels:
                 continue
-            counts = Counter(labels.values())
-            dups = [lab for lab, n in counts.items() if n > 1]
-            if dups:
-                dup_cells = [f"{get_column_letter(col)}{region.header_rows[0]}"
-                             for col, lab in labels.items() if lab in dups]
-                findings.append({"code": "side_by_side", "cells": sorted(dup_cells),
-                                 "detail": f"헤더 라벨 중복({', '.join(dups)}) — 나란히 놓인 두 표로 판단"})
+            sbs_cols, cols, seq = _detect_side_by_side(labels)
+            if sbs_cols:
+                hr0 = region.header_rows[0]
+                dup_cells = sorted(f"{get_column_letter(c)}{hr0}" for c in sbs_cols)
+                involved = sorted({seq[cols.index(c)] for c in sbs_cols})
+                findings.append({"code": "side_by_side", "cells": dup_cells,
+                                 "detail": f"나란히 놓인 두 표로 판단(중복/반복 헤더: {', '.join(involved)})"})
             # empty_header: 사용 열에 헤더 라벨이 비어있는 칸
             # 임계치: 전체 region 열 중 빈 헤더 비율이 50% 초과인 경우만 플래그
             # (trailing blank columns 오탐 방지 — 뒤쪽 빈 열은 무시)
