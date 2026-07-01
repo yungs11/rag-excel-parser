@@ -69,10 +69,73 @@ def test_kordoc_backend_rows_and_coords(doc):
     cfg = ParserConfig(backend="kordoc", kordoc_md_path=str(md))
     chunks, _ = get_backend("kordoc").parse(xlsx, cfg)
     rows = {c["range"]: c for c in chunks if c["chunk_type"] == "table_row"}
-    # 작업A 행이 원본 A4:* 로 좌표 복원
+    # 작업A 행이 원본 A4:* 로 좌표 복원. 빈 헤더 컬럼(팀장)도 빈값으로 포함된다.
     a = next(c for c in chunks if c["fields"].get("항목") == "작업A")
-    assert a["fields"] == {"항목": "작업A", "담당": "홍길동", "비고": "메모1"}
+    assert a["fields"] == {"항목": "작업A", "담당": "홍길동", "비고": "메모1", "팀장": ""}
     assert a["source"]["start_row"] == 4
+
+
+# ─── 결함 회귀: (1) 시트명 중복 (2) 값 짤림 (3) 빈칸/중복헤더 ────────────
+_WIDE_VALUE = "가" * 1000  # content 600 / embedding 900 상한을 초과시키는 긴 값
+
+MD2 = """## 자산
+
+<table>
+<tr><th colspan="5">자산</th></tr>
+<tr><td>ID</td><td>담당자</td><td>메모</td><td>담당자</td><td>도입일</td></tr>
+<tr><td>SV-1</td><td>홍길동</td><td>__WIDE__</td><td></td><td>2019.07</td></tr>
+</table>
+""".replace("__WIDE__", _WIDE_VALUE)
+
+
+@pytest.fixture()
+def doc2(tmp_path):
+    xlsx = tmp_path / "자산.xlsx"
+    md = tmp_path / "자산.md"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "자산"
+    ws["A1"] = "자산"
+    ws.merge_cells("A1:E1")
+    ws["A3"], ws["B3"], ws["C3"], ws["D3"], ws["E3"] = "ID", "담당자", "메모", "담당자", "도입일"
+    ws["A4"], ws["B4"], ws["C4"], ws["E4"] = "SV-1", "홍길동", _WIDE_VALUE, "2019.07"
+    wb.save(xlsx)
+    md.write_text(MD2, encoding="utf-8")
+    return xlsx, md
+
+
+def test_issue1_sheet_name_not_duplicated(doc2):
+    """title == sheet 일 때 '자산의 자산 시트' 중복 금지 → '자산 시트'."""
+    xlsx, md = doc2
+    cfg = ParserConfig(backend="kordoc", kordoc_md_path=str(md))
+    chunks, _ = get_backend("kordoc").parse(xlsx, cfg)
+    row = next(c for c in chunks if c["fields"].get("ID") == "SV-1")
+    assert "자산의 자산 시트" not in row["content_text"]
+    assert row["content_text"].startswith("자산 시트")
+
+
+def test_issue2_long_row_not_truncated(doc2):
+    """넉넉한 상한(기본 content 3000 / embedding 4000)으로 긴 행이 안 짤린다."""
+    xlsx, md = doc2
+    cfg = ParserConfig(backend="kordoc", kordoc_md_path=str(md))
+    chunks, _ = get_backend("kordoc").parse(xlsx, cfg)
+    row = next(c for c in chunks if c["fields"].get("ID") == "SV-1")
+    assert row["fields"]["메모"] == _WIDE_VALUE  # 값 자체는 온전
+    assert _WIDE_VALUE in row["metadata"]["embedding_text"]  # 임베딩 텍스트에 전체 포함
+
+
+def test_issue3_empty_and_duplicate_headers(doc2):
+    """빈칸 헤더 포함 + 중복 라벨(담당자 2회)을 접미사로 구분."""
+    xlsx, md = doc2
+    cfg = ParserConfig(backend="kordoc", kordoc_md_path=str(md))
+    chunks, _ = get_backend("kordoc").parse(xlsx, cfg)
+    row = next(c for c in chunks if c["fields"].get("ID") == "SV-1")
+    f = row["fields"]
+    # 첫 담당자는 값, 두 번째 담당자(D열)는 빈칸이지만 접미사로 구분되어 포함
+    assert f["담당자"] == "홍길동"
+    assert f["담당자(D)"] == ""
+    # 빈칸 도입일은 아니지만, 5개 헤더 전부 존재해야 함
+    assert set(f) == {"ID", "담당자", "메모", "담당자(D)", "도입일"}
 
 
 def test_kordoc_backend_compact_matrix(doc):

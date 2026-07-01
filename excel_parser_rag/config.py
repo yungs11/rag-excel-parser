@@ -56,6 +56,8 @@ class ParserConfig:
     document_title: Optional[str] = None  # 미지정 시 자동 추출
     delegation_merge_max_chars: int = 1100  # delegation_rule 형제 병합 한도(문자). 0=비활성
     numbering_merge_max_chars: int = 1100   # kordoc 십진번호(WBS) 병합 한도(문자). 0=비활성
+    row_content_max_chars: int = 3000       # table_row content_text 상한(문자). 넓은 행 짤림 방지
+    row_embedding_max_chars: int = 4000     # table_row core/embedding_text 상한(문자, BGE-M3 8192토큰 내)
 
     # 백엔드 (SoT 통합설계). "kordoc" = kordoc .md 기반 (기본), "openpyxl" = 기존 region 파서
     backend: str = "kordoc"

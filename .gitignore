@@ -23,3 +23,6 @@ test_doc_excel/
 !README.md
 plans/
 tests/test_backend_recall.py
+
+# 런타임 서비스 로그
+_service.log
