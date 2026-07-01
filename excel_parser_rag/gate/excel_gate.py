@@ -111,8 +111,26 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
                         ref_set.add((cell.row, cell.column))
         ref_cells = [f"{get_column_letter(c)}{r}" for r, c in sorted(ref_set)]
         if ref_cells:
+            # 플래그 좌표마다 무조건 캐시값(#REF!)+수식(=J9)을 조회.
+            #   - H3=`=J9` 처럼 에러토큰 없는 수식셀은 캐시 #REF! 로만 플래그되므로
+            #     ERROR_RE 매치 분기 안에서 수식을 잡으면 도달 불가 → 좌표 무조건 조회.
+            #   - MergedCell 방어: getattr 로 value 안전 접근.
+            parts: List[str] = []
+            for r, c in sorted(ref_set):
+                coord = f"{get_column_letter(c)}{r}"
+                value = getattr(ws.cell(r, c), "value", None)
+                formula = getattr(ws_f.cell(r, c), "value", None) if ws_f is not None else None
+                fml = str(formula)[:60] if formula is not None else None
+                if value is None and fml:
+                    parts.append(f"{coord}=({fml})")
+                elif fml:
+                    parts.append(f"{coord}={value} ({fml})")
+                else:
+                    parts.append(f"{coord}={value}")
+                if len(parts) >= 5:
+                    break
             findings.append({"code": "ref_error", "cells": ref_cells[:20],
-                             "detail": f"참조 오류가 값에 포함됨: {', '.join(ref_cells[:5])}"})
+                             "detail": f"참조 오류가 값에 포함됨: {', '.join(parts)}"})
 
         # 2)~3) side_by_side / empty_header — region 헤더 기반
         for region, canvas in by_sheet.get(ws.title, []):
@@ -124,8 +142,10 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
                 hr0 = region.header_rows[0]
                 dup_cells = sorted(f"{get_column_letter(c)}{hr0}" for c in sbs_cols)
                 involved = sorted({seq[cols.index(c)] for c in sbs_cols})
+                hdr_seq = " | ".join(seq[:12]) + (" …" if len(seq) > 12 else "")
                 findings.append({"code": "side_by_side", "cells": dup_cells,
-                                 "detail": f"나란히 놓인 두 표로 판단(중복/반복 헤더: {', '.join(involved)})"})
+                                 "detail": f"나란히 놓인 두 표로 판단(중복/반복 헤더: {', '.join(involved)})"
+                                           f"(헤더행: {hdr_seq})"})
             # empty_header: 사용 열에 헤더 라벨이 비어있는 칸.
             # ⚠️ 의도적으로 거의 비활성(보수적): region 이 잡혔다는 건 보통 라벨 ≥2 이므로
             #   아래 `len(labels) < 2` 게이트로 실질적 미발화. trailing blank column 오탐을
@@ -152,8 +172,12 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
                 src = c.get("source") or {}
                 row = src.get("start_row")
                 loc = [f"row{row}"] if row else []
+                leaked = [str(k) for k, v in fields.items()
+                          if isinstance(v, str) and v.strip() == str(k).strip() and v.strip()][:5]
+                pairs = ", ".join(f"{k}={k}" for k in leaked)
+                # row{n}(청크 데이터행)은 실제 헤더행과 다를 수 있어 모호 → 헤더=값 쌍으로 자기설명.
                 findings.append({"code": "header_leak", "cells": loc,
-                                 "detail": "헤더행이 데이터로 추출됨(헤더=값)"})
+                                 "detail": f"헤더행이 데이터로 추출됨(이 행이 헤더 라벨과 동일): {pairs}"})
                 break  # 시트당 1건이면 충분
 
         sheets_out.append({"sheet": ws.title, "ok": not findings, "findings": findings})
