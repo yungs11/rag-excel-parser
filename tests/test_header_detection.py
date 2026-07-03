@@ -102,3 +102,45 @@ class TestOverride:
         assert region.header_rows == [1], (
             f"override header_rows 가 덮어써짐: {region.header_rows}"
         )
+
+
+class TestSpannedSubHeaderCapture:
+    """스팬 부모헤더(전결권자) 아래의 무스타일·희소 leaf 행(부총장/처장)이
+    세로병합 그림자로 헤더밴드에 편입되어야 한다 (p06 회귀 — 정보보호는 이미 정상)."""
+
+    _P06 = "/Users/xxx/workspace/7.excel-parser/test_doc_excel/위임전결규정_병합셀_6p-35p.xlsx"
+
+    def _region(self, sheet):
+        import pathlib
+        from excel_parser_rag.config import ParserConfig
+        from excel_parser_rag.pipeline import build_canvases, detect_and_classify
+
+        cfg = ParserConfig()
+        cvs = build_canvases(pathlib.Path(self._P06), cfg)
+        for region, canvas in detect_and_classify(cvs, cfg):
+            if canvas.sheet_name == sheet:
+                return region
+        raise AssertionError(f"no region on {sheet}")
+
+    def test_p06_subheader_row_in_header_band(self):
+        region = self._region("p06_t01")
+        assert 2 in region.header_rows, (
+            f"row2(부총장/처장) 가 header_rows 에 미포함: {region.header_rows}"
+        )
+        # row3(전부서공통/물품 = 데이터 카테고리 행)은 헤더밴드 밖 — body 로 남아야 함.
+        assert 3 not in region.header_rows, (
+            f"row3(데이터) 가 header_rows 에 오편입: {region.header_rows}"
+        )
+        assert 3 in region.body_rows, (
+            f"row3 데이터가 body 에서 소실: body={sorted(region.body_rows)[:6]}"
+        )
+
+    def test_p06_role_names_survive(self):
+        region = self._region("p06_t01")
+        names = [str(v) for v in region.matrix_cols.values()]
+        assert any("처장" in v for v in names), (
+            f"역할명 '처장'(row2 leaf) 미포착: {sorted(names)}"
+        )
+        assert not any(compact(v) == compact("전결권자") + "_2" for v in names), (
+            f"전결권자_2 garbage 잔존: {sorted(names)}"
+        )

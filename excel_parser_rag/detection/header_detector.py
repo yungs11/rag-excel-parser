@@ -76,6 +76,24 @@ def _merge_span_cols(cell: "CellNode", canvas: "SheetCanvas") -> Tuple[int, int]
         return cell.col, cell.col
 
 
+def _is_merge_shadow_row(canvas: "SheetCanvas", row: int, header_rows: List[int]) -> bool:
+    """row 의 셀 중 하나라도 header_rows 에서 시작하는 세로/블록 병합에 덮이면 True.
+
+    스팬 부모헤더(전결권자 F1:G1) 아래의 무스타일·희소 leaf 행(부총장/처장)을
+    헤더밴드로 편입하기 위한 신호. 세로병합(부서명 A1:A2 등)이 헤더행에서 시작해
+    아래로 뻗으면 그 밑 행도 같은 헤더 구조의 일부다.
+    """
+    hset = set(header_rows)
+    for mr in canvas.merged_ranges:
+        try:
+            _c0, r0, _c1, r1 = range_boundaries(mr)
+        except Exception:
+            continue
+        if r0 in hset and r0 < row <= r1:
+            return True
+    return False
+
+
 def _title_rows(region: "Region") -> Set[int]:
     """region.title_range 가 region 내부에 있으면 해당 행들을 반환."""
     if not region.title_range:
@@ -188,10 +206,28 @@ def _detect_header_rows(
         if m.get("numbering_ratio", 0.0) > 0 or m.get("marker_ratio", 0.0) > 0:
             break  # 본문 시작 (항목 번호/마커 등장)
         score = _header_score(m)
-        if score >= _HEADER_SCORE_MIN and m["style_signal"] >= _STYLE_GATE_MIN and m["filled"] >= 2:
+        strong = (
+            score >= _HEADER_SCORE_MIN
+            and m["style_signal"] >= _STYLE_GATE_MIN
+            and m["filled"] >= 2
+        )
+        # 스팬 부모헤더 아래 leaf 행: 무스타일·희소라 style gate 는 탈락하지만,
+        # 헤더행에서 시작한 세로/블록 병합에 덮이면(=헤더밴드 연장) 헤더로 편입한다.
+        # 마커/번호 행은 위에서 이미 break 되므로 본문행 오편입 위험 없음.
+        shadow_cont = (
+            not strong
+            and bool(headers)
+            and m["filled"] >= 2
+            and score >= _HEADER_SCORE_MIN
+            and _is_merge_shadow_row(canvas, r, headers)
+        )
+        if strong or shadow_cont:
             headers.append(r)
             best = max(best, score)
-            if len(headers) >= max_depth:
+            # shadow leaf 행(스팬 부모 아래 sub-header)은 헤더밴드의 끝이다.
+            # 그 아래는 본문이므로 더 진행하지 않는다(블록병합·스타일된 데이터
+            # 카테고리 행이 strong 으로 오편입되는 것을 차단).
+            if shadow_cont or len(headers) >= max_depth:
                 break
         else:
             if headers:
