@@ -150,6 +150,28 @@ def test_kordoc_backend_compact_matrix(doc):
     assert "○" not in m["fields"].get("해당", "")
 
 
+def test_looks_multiheader_rowspan_leaf_group():
+    """2단 헤더: 그룹행이 rowspan=2 leaf열(WBSID 등) + colspan 스팬열(계획/실적)을 섞어
+    detail행과 셀 개수가 같아도 다단헤더로 인식해야 한다(ST-AI-PM WBS 실측 회귀).
+    cells = (col, text, colspan, rowspan, tag)."""
+    from excel_parser_rag.backends.kordoc_backend import _looks_multiheader
+    group = [(1, "WBSID", 1, 2, "td"), (2, "분류", 1, 2, "td"), (3, "구분", 1, 2, "td"),
+             (4, "TASK", 1, 2, "td"), (5, "요구사항 ID", 1, 2, "td"), (6, "담당자", 1, 2, "td"),
+             (7, "계획", 3, 1, "td"), (10, "실적", 4, 1, "td"), (14, "진척율", 2, 1, "td")]
+    detail = [(7, "시작일", 1, 1, "td"), (8, "완료일", 1, 1, "td"), (9, "기간", 1, 1, "td"),
+              (10, "시작일", 1, 1, "td"), (11, "종료일", 1, 1, "td"), (12, "기간", 1, 1, "td"),
+              (13, "TASK단계", 1, 1, "td"), (14, "계획", 1, 1, "td"), (15, "실적", 1, 1, "td")]
+    assert _looks_multiheader(group, detail) is True
+
+
+def test_looks_multiheader_rejects_marker_data_row():
+    """위임전결형 오탐 방지: 스팬 그룹행 아래가 마커(○) 데이터면 다단헤더 아님."""
+    from excel_parser_rag.backends.kordoc_backend import _looks_multiheader
+    group = [(1, "전결사항", 4, 1, "td")]
+    detail = [(1, "○", 1, 1, "td"), (2, "○", 1, 1, "td"), (3, "△", 1, 1, "td"), (4, "×", 1, 1, "td")]
+    assert _looks_multiheader(group, detail) is False
+
+
 def test_kordoc_backend_missing_md_errors(tmp_path):
     xlsx = tmp_path / "없는md.xlsx"
     _make_xlsx(xlsx)
