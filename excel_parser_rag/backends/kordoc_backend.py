@@ -649,9 +649,10 @@ class KordocBackend:
                                      embed_cap=config.row_embedding_max_chars))
             sheets_done += 1
 
-        # 십진번호(WBS) 계층 병합 — self-gating(번호 필드 없으면 무변화)
-        from ..chunking.wbs_merger import merge_wbs_rows
-        all_chunks = merge_wbs_rows(all_chunks, max_chars=config.numbering_merge_max_chars)
+        # CGH 계층 병합 — self-gating(번호 spine 없으면 무변화). 모든 내부노드가
+        # 직속 자식 아웃라인을 품는 hierarchy_node 요약청크를 발행한다.
+        from ..chunking.hierarchy_tree import merge_hierarchy_rows
+        all_chunks = merge_hierarchy_rows(all_chunks, max_chars=config.numbering_merge_max_chars)
 
         ct = Counter(c["chunk_type"] for c in all_chunks)
         rt = Counter(c["region_type"] for c in all_chunks)

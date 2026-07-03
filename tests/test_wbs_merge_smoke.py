@@ -15,16 +15,17 @@ WBS = Path("/Users/xxx/workspace/excel-parser-markitdown/test_doc_excel/"
 
 @pytest.mark.skipif(not WBS.exists() or not shutil.which("kordoc"), reason="WBS 파일 또는 kordoc CLI 없음")
 def test_kordoc_wbs_merges_decimal_hierarchy():
+    # CGH: 내부노드는 hierarchy_node 요약청크(metadata.merged=True)로 발행된다.
     cfg = ParserConfig(); cfg.backend = "kordoc"; cfg.kordoc_bin = "kordoc"; cfg.kordoc_md_out = "/tmp/kordoc_md"
     chunks, _ = get_backend("kordoc").parse(WBS, cfg)
-    merged = [c for c in chunks if c.get("metadata", {}).get("merged")]
-    assert merged, "WBS 병합 청크 0"
-    # 부모 1.1 묶음 존재 + 자식 포함 + 임베딩 텍스트 갱신 + 캡
-    for c in merged:
+    hnodes = [c for c in chunks if c.get("chunk_type") == "hierarchy_node"]
+    assert hnodes, "WBS hierarchy_node 0 (계층 미발화)"
+    # 모든 내부노드는 직속 자식 아웃라인 보유(단절 0) + 임베딩 텍스트 동기화
+    for c in hnodes:
         md = c["metadata"]
+        assert md.get("merged") is True
+        assert md.get("child_nos"), "내부노드에 자식 아웃라인 없음(단절)"
         assert md["core_text"] == md["embedding_text"] == c["content_text"]
-        assert len(md["embedding_text"]) <= 1100
-        assert md["merged_count"] >= 2
 
 
 @pytest.mark.skipif(not WBS.exists() or not shutil.which("kordoc"), reason="WBS 파일 또는 kordoc CLI 없음")

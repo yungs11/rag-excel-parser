@@ -23,13 +23,17 @@ def test_flat_asset_list_unchanged_by_wbs_merge():
 
 
 @pytest.mark.skipif(not WBS.exists() or not shutil.which("kordoc"), reason="WBS/CLI 없음")
-def test_wbs_merge_reduces_chunk_count():
+def test_wbs_cgh_emits_connected_internal_nodes():
+    # CGH: 병합으로 청크 수가 줄지 않고(요약노드 추가), 모든 내부노드가 자식 아웃라인
+    # 을 품는다(부모-자식 단절 0). 이것이 Method B 대체의 핵심 계약.
     cfg = ParserConfig(); cfg.backend = "kordoc"; cfg.kordoc_bin = "kordoc"; cfg.kordoc_md_out = "/tmp/kordoc_md"
-    cfg0 = ParserConfig(); cfg0.backend = "kordoc"; cfg0.kordoc_bin = "kordoc"; cfg0.kordoc_md_out = "/tmp/kordoc_md"
-    cfg0.numbering_merge_max_chars = 0
-    base, _ = get_backend("kordoc").parse(WBS, cfg0)
     merged, _ = get_backend("kordoc").parse(WBS, cfg)
-    wbs_base = [c for c in base if c["sheet"].startswith("중소형")]
     wbs_merged = [c for c in merged if c["sheet"].startswith("중소형")]
-    assert len(wbs_merged) < len(wbs_base)  # 병합으로 감소
-    assert any(c.get("metadata", {}).get("merged") for c in wbs_merged)
+    hnodes = [c for c in wbs_merged if c.get("chunk_type") == "hierarchy_node"]
+    assert hnodes, "hierarchy_node 미발화"
+    # 단절 0: 모든 내부노드에 child_nos 존재
+    disconnected = [c["metadata"].get("node_no") for c in hnodes
+                    if not c["metadata"].get("child_nos")]
+    assert disconnected == [], f"단절된 내부노드: {disconnected}"
+    # 루트 '1' 이 요약노드로 존재(기존 단독 방치 → 요약 발행으로 전환)
+    assert any(c["metadata"].get("node_no") == "1" for c in hnodes)
