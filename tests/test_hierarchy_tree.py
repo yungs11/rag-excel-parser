@@ -115,6 +115,14 @@ def test_detect_spine_decimal_progress_no_op():
     assert detect_spine(rows, min_ratio=0.6) is None
 
 
+def test_detect_spine_measurement_column_no_op():
+    """공수(person-month) 측정열: 정수 다수 + 우연한 소수 2건(3.2, 100.2 합계).
+    분기(자식 2+인 부모)가 없어 계층 아님 → None (인력관리대장 실측 오발화 회귀)."""
+    vals = ["7", "1", "6", "7", "3", "3.2", "2", "6", "4", "5", "100.2"]
+    rows = [_row(r, v, spine="전체공수_계획", label="x") for r, v in enumerate(vals, start=2)]
+    assert detect_spine(rows, min_ratio=0.6) is None
+
+
 # ================================================================ MUST-FIX 3: parent_of & phantom
 def test_parent_of_longest_prefix():
     allnums = {"1", "1.1", "1.1.1"}

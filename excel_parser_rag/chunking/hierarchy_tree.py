@@ -167,6 +167,15 @@ def detect_spine(rows: List[Dict[str, Any]], *, min_ratio: float = 0.6) -> Optio
         with_parent = sum(1 for x in deep if parent_of(x, allnums) is not None)
         if not deep or with_parent / len(deep) < 0.5:
             continue
+        # 측정값 열(공수/금액) 오발화 차단: 진짜 계층은 '자식 2개 이상인 부모'가
+        # 최소 1개 존재(분기). 고립된 소수(3.2 홀로, 100.2 합계)뿐인 열은 분기가 없어 배제.
+        childcount: Dict[str, int] = {}
+        for x in allnums:
+            p = parent_of(x, allnums)
+            if p is not None:
+                childcount[p] = childcount.get(p, 0) + 1
+        if not any(cnt >= 2 for cnt in childcount.values()):
+            continue
         if m > best_m:
             best, best_m = k, m
     return best
