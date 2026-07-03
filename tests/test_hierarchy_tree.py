@@ -53,6 +53,15 @@ def test_norm_num_arabic_dotted():
     assert norm_num("1.1. AI Agent") == "1.1"
 
 
+def test_norm_num_no_digit_absorption_from_label():
+    """'6.3. 1차 입찰'의 '1차' 숫자를 세그먼트로 흡수 금지 → 6.3.1 유령 방지.
+    연속 세그먼트는 공백 없는 tight dot 일 때만 이어진다."""
+    assert norm_num("6.3. 1차 입찰", in_spine=True) == "6.3"
+    assert norm_num("6.3. 1차 입찰") == "6.3"
+    assert norm_num("2.4. 3차 검토", in_spine=True) == "2.4"
+    assert norm_num("가. 1번 항목", in_spine=True) == "1"  # 가 다음 공백 → 번호 종료
+
+
 def test_norm_num_hangul_ordinal():
     assert norm_num("가.") == "1"
     assert norm_num("가.1") == "1.1"

@@ -53,28 +53,28 @@ def norm_num(raw: Any, *, in_spine: bool = False) -> Optional[str]:
     segs: List[int] = []
     is_arabic = False
     pos = 0
+    _DELIM = ".)．)"                       # 세그먼트 종료 구분자
     while pos < len(s):
         m = _SEG.match(s, pos)
         if not m or m.start() != pos:
             break
         tok = m.group(1)
         end = m.end()
-        sep = _SEP.match(s, end)
-        at_end = end == len(s)
-        # 한글 서수는 뒤에 구분자/끝이 반드시 와야 인정('가능성' 차단)
-        if tok in _HORD and not (sep or at_end):
+        nxt = s[end:end + 1]               # 세그먼트 직후 1글자
+        # 한글 서수는 뒤에 구분자/공백/끝이 반드시 와야 인정('가능성'의 '가' 차단)
+        if tok in _HORD and not (nxt == "" or nxt.isspace() or nxt in _DELIM):
             break
         if tok in _HORD:
             segs.append(_HORD[tok])
         else:
             segs.append(int(tok))
             is_arabic = True
-        if sep:
-            pos = sep.end()
+        pos = end                          # 소비한 세그먼트 끝으로 전진(종료 시 remainder 계산 정확)
+        # 다음 세그먼트로의 연속은 '공백 없는 tight dot' 일 때만.
+        # (예: "1.1.1" 은 이어지고, "6.3. 1차" 의 ". 1" 은 라벨이므로 끊는다)
+        if nxt == "." and _SEG.match(s, end + 1) and s[end + 1:end + 2] not in ("", " ", "\t"):
+            pos = end + 1
             continue
-        if at_end:
-            pos = end
-            break
         break
     if not segs:
         return None
@@ -197,11 +197,14 @@ def _label_of(chunk: Dict[str, Any], spine: str) -> str:
     f = chunk.get("fields") or {}
     sv = f.get(spine)
     if isinstance(sv, str):
-        rest = _MARKER_PREFIX.sub("", sv)
-        rest = re.sub(r"^\s*\d+(?:\.\d+)*\s*", "", rest)
-        rest = rest.lstrip(" .·)-").strip()
-        if rest and not norm_num(rest, in_spine=True):
-            return rest[:80]
+        svs = sv.strip()
+        # 순수 번호 마커 셀(WBSID '1.1', '가.1')이면 셀 내 라벨 없음 → 서술 컬럼으로 폴백.
+        # (한글은 서수 14자만 마커로 취급; '차/입/찰' 같은 일반 음절이 있으면 라벨 있는 셀)
+        pure = re.fullmatch(r"[\d" + HANGUL_ORD + r".)．)\s]+", svs)
+        if not pure:
+            rest = _MARKER_PREFIX.sub("", svs).lstrip(" .·)-").strip()
+            if rest:
+                return rest[:80]
     for k, v in f.items():
         if k == spine:
             continue
