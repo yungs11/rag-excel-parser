@@ -41,3 +41,53 @@ def test_real_asset_list_routes_kordoc_no_explosion():
     # 쓰레기 matrix_fact 폭발 없음 (openpyxl 미접촉)
     mf = [c for c in chunks if c["chunk_type"] == "matrix_fact"]
     assert len(mf) < 100, f"matrix_fact 과다({len(mf)}) — kordoc 라우팅 실패 의심"
+
+
+# 다중 좌측 라벨열(구분+업무내용) — 업무내용 태스크명이 항목으로 보존되어야 함 (과적합 수정)
+JIKMU = Path("/Users/xxx/workspace/7.excel-parser/test_doc_excel/직무전결기준표(2026.05.04).xlsx")
+
+
+@pytest.mark.skipif(not JIKMU.exists(), reason="직무전결 파일 없음")
+def test_jikmu_task_names_survive_as_items():
+    cfg = ParserConfig(); cfg.backend = "openpyxl"
+    cfg.chunk_profiles = ["delegation_rule", "note", "code_mapping"]
+    chunks, _ = get_backend("openpyxl").parse(JIKMU, cfg)
+    deleg = [c for c in chunks if c["chunk_type"] == "delegation_rule" and c.get("sheet") == "신한DS"]
+    assert deleg, "직무전결 delegation_rule 0"
+    blob = "\n".join(c["content_text"] for c in deleg)
+    # 업무내용 태스크명이 항목으로 등장(구분 그룹으로 붕괴되지 않음)
+    assert "연간 사업계획" in blob, "업무내용 태스크명(연간 사업계획)이 항목에서 소실"
+    # 해당 태스크의 전결권자(CEO)가 매핑됨
+    assert "연간 사업계획: 전결권자 CEO" in blob.replace("  ", " "), (
+        "연간 사업계획 → CEO 매핑 실패"
+    )
+
+
+@pytest.mark.skipif(not JIKMU.exists(), reason="직무전결 파일 없음")
+def test_jikmu_task_column_not_in_matrix():
+    """업무내용(col3)이 matrix(역할)축이 아니라 계층축이어야 함."""
+    from excel_parser_rag.pipeline import build_canvases, detect_and_classify
+
+    cfg = ParserConfig()
+    for region, canvas in detect_and_classify(build_canvases(JIKMU, cfg), cfg):
+        if canvas.sheet_name == "신한DS":
+            names = {str(v) for v in region.matrix_cols.values()}
+            assert "업무내용" not in names, f"업무내용이 matrix 로 오분류: {sorted(names)}"
+            assert 3 in region.hierarchy_cols, f"업무내용(col3) 계층축 미포함: {region.hierarchy_cols}"
+            return
+    pytest.fail("신한DS region 미검출")
+
+
+@pytest.mark.skipif(not ASSET.exists(), reason="자산목록 파일 없음")
+def test_wide_asset_matrix_not_over_absorbed():
+    """자산목록 전체자산: ○ boolean 열이 데이터열 사이에 흩어진 광폭표.
+    연속 역할밴드가 없으므로 라벨열 다중 흡수(과흡수)가 일어나면 안 된다."""
+    from excel_parser_rag.pipeline import build_canvases, detect_and_classify
+
+    cfg = ParserConfig()
+    for region, canvas in detect_and_classify(build_canvases(ASSET, cfg), cfg):
+        if canvas.sheet_name == "전체자산":
+            hc = list(region.hierarchy_cols or [])
+            assert len(hc) <= 2, f"전체자산 계층열 과흡수: {hc}"
+            return
+    pytest.fail("전체자산 region 미검출")

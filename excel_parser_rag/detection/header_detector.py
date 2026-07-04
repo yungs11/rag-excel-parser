@@ -282,6 +282,59 @@ def _flatten_column_names(
 
 # --- 컬럼 역할 부여 ----------------------------------------------------------------
 
+def _absorb_label_cols(
+    region: "Region",
+    canvas: "SheetCanvas",
+    cols: List[int],
+    parts_by_col: Dict[int, List[str]],
+    header_rows: List[int],
+    first_named: int,
+) -> List[int]:
+    """first_named 부터 우측으로 '마커 희박한 좌측 라벨열'을 역할밴드 전까지 연속 흡수.
+
+    다중 좌측 라벨열(구분+업무내용, 부서명+단위업무+세부업무)을 계층축으로 보존한다.
+    중단 조건: 역할열(마커 밀집/순수마커) 또는 메타 헤더(비고/합의 등) 또는 빈 열.
+    위치 하드코딩 없음 — 판정은 본문 마커밀도와 헤더 어휘로만.
+    """
+    body_start = (max(header_rows) + 1) if header_rows else region.min_row
+
+    def _col_role(c: int) -> Tuple[int, bool]:
+        """(filled, is_role). is_role = 마커 밀집(>=2) 또는 순수마커(mk==filled)."""
+        filled = mk = 0
+        for r in range(body_start, region.max_row + 1):
+            cell = canvas.cells.get((r, c))
+            if cell is None or cell.is_empty:
+                continue
+            t = _cell_text(cell)
+            if not t:
+                continue
+            filled += 1
+            if is_marker_cell(cell, t):
+                mk += 1
+        return filled, (filled > 0 and (mk >= 2 or mk == filled))
+
+    colset = set(cols)
+    absorbed: List[int] = [first_named]
+    for c in cols:
+        if c <= first_named:
+            continue
+        filled, isrole = _col_role(c)
+        if isrole:
+            # 진짜 역할밴드인가: 이 열과 다음 열이 모두 role(=≥2 연속). 자산목록처럼
+            # 데이터열 사이에 흩어진 단일 boolean 마커열은 밴드가 아니므로 기각.
+            nxt = c + 1
+            _, nxt_role = _col_role(nxt) if nxt in colset else (0, False)
+            if nxt_role and len(absorbed) >= 2:
+                return absorbed
+            return []
+        # 역할 전에 메타(비고/합의 …) 또는 빈 열을 만나면 전결 매트릭스 레이아웃 아님 → 기각
+        name = compact(parts_by_col[c][-1]) if parts_by_col.get(c) else ""
+        if name in _METADATA_HEADER_TERMS or filled == 0:
+            return []
+        absorbed.append(c)
+    return []  # 끝까지 연속 역할밴드를 만나지 못함 → 다중 라벨열 아님
+
+
 def _detect_hierarchy_cols(
     region: "Region",
     canvas: "SheetCanvas",
@@ -302,6 +355,13 @@ def _detect_hierarchy_cols(
         if c1 > c0:
             # "전 결 사 항" 처럼 항목 헤더가 가로(또는 블록) 병합으로 여러 컬럼을 차지
             return [c for c in range(c0, c1 + 1) if c in colset]
+        # 매트릭스 계열: 다중 좌측 라벨열(구분+업무내용 등)을 역할밴드 전까지 흡수.
+        if region.region_type in ("matrix_table", "hierarchical_matrix"):
+            absorbed = _absorb_label_cols(
+                region, canvas, cols, parts_by_col, header_rows, first_named
+            )
+            if len(absorbed) >= 2:
+                return absorbed
         label = compact(parts_by_col[first_named][0])
         if any(term in label for term in _ITEM_HEADER_TERMS):
             return [first_named]
