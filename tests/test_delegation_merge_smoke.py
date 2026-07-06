@@ -91,3 +91,22 @@ def test_wide_asset_matrix_not_over_absorbed():
             assert len(hc) <= 2, f"전체자산 계층열 과흡수: {hc}"
             return
     pytest.fail("전체자산 region 미검출")
+
+
+@pytest.mark.skipif(not JIKMU.exists(), reason="직무전결 파일 없음")
+def test_full_width_banner_not_emitted_as_rule():
+    """전폭 병합 섹션배너('1. 경영 관리' A5:H5)가 '비고=배너텍스트' delegation 청크로
+    오출력되면 안 된다 — 병합 텍스트가 비고 열로 퍼진 echo."""
+    from excel_parser_rag.textutil import compact as _c
+
+    cfg = ParserConfig(); cfg.backend = "openpyxl"
+    cfg.chunk_profiles = ["delegation_rule", "note", "code_mapping"]
+    chunks, _ = get_backend("openpyxl").parse(JIKMU, cfg)
+    deleg = [c for c in chunks if c["chunk_type"] == "delegation_rule"]
+    # glitch signature: 비고(또는 다른 메타) 값이 그 행의 항목과 동일
+    glitch = [
+        c for c in deleg
+        if _c(str(c.get("fields", {}).get("비고", ""))) == _c(str(c.get("fields", {}).get("항목", "")))
+        and c.get("fields", {}).get("항목")
+    ]
+    assert not glitch, f"배너 glitch 청크 {len(glitch)}건: {[c['content_text'][:60] for c in glitch[:3]]}"
