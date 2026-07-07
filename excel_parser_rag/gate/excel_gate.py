@@ -175,6 +175,11 @@ def compute_gate_summary(input_path, chunks: List[Dict[str, Any]]) -> Dict[str, 
         # 3b) ambiguous_hierarchy — 계층열의 최소 번호레벨이 strictly 증가하지 않으면
         #     (깊은 열이 얕은 열과 같은 단계로 번호를 재시작) 상하위 관계가 모호 (SoT §계층).
         #     region_type=='hierarchical_matrix' 한정(precision 우선). cells 는 실제 번호 body 셀.
+        #     [알려진 한계 — false-negative] 이 신호는 열 레벨을 item_numbering_level 로만 근사한다.
+        #     대분류가 '미인식 마커'(①/i/a 등, item_numbering_level=None)인 경우, 파서는
+        #     컬럼위치 fallback 으로 그 열에 level(예 0)을 부여해 하위의 인식마커('1.', level0)와
+        #     충돌·붕괴하지만, 이 스캔은 그 열을 못 봐서 놓친다. 대분류가 인식 마커(1./가./I.)인
+        #     흔한 케이스(예: 직무전결)는 정확히 커버. 근본 커버는 증상기반 신호(고아율 등, 후속).
         for region, canvas in by_sheet.get(ws.title, []):
             if region.region_type != "hierarchical_matrix":
                 continue
