@@ -1,5 +1,9 @@
 import pathlib
-from excel_parser_rag.gate.excel_gate import compute_gate_summary
+import re
+
+import pytest
+
+from excel_parser_rag.gate.excel_gate import compute_gate_summary, _numbering_restart
 from excel_parser_rag.pipeline import parse_excel_for_rag
 
 ROOT = pathlib.Path("/Users/xxx/workspace")
@@ -55,6 +59,38 @@ def test_wijum_passes_for_now():
     s = _summ(EXCEL / "2-1. 위임전결기준표(2026.04.17. 개정).xlsx")
     # 향후 고도화 전까지 통과(매트릭스 미차단)
     assert _codes(s, "위임전결") == set()
+
+
+# ── ambiguous_hierarchy: 계층열에서 번호가 재시작되어 상하위 모호한 표 게이트 ──
+
+def test_numbering_restart_helper():
+    assert _numbering_restart([(2, 0), (3, 0)]) == (2, 3)        # 직무전결형(깊은 열이 같은 0으로 재시작)
+    assert _numbering_restart([(1, 1), (2, 1)]) == (1, 2)        # 가.나.다.가 최상위인 문서의 재시작
+    assert _numbering_restart([(2, 0), (3, 3), (4, 5)]) is None  # 위임전결형(최소레벨 strictly 증가)
+    assert _numbering_restart([(2, 0)]) is None
+    assert _numbering_restart([]) is None
+
+
+def test_ambiguous_hierarchy_fires_jikmu():
+    path = EXCEL / "직무전결기준표(2026.05.04).xlsx"
+    if not path.exists():
+        pytest.skip("직무전결 파일 없음")
+    s = _summ(path)
+    assert "ambiguous_hierarchy" in _codes(s, "신한DS")
+    cells = [c for f in next(x for x in s["sheets"] if "신한DS" in x["sheet"])["findings"]
+             if f["code"] == "ambiguous_hierarchy" for c in f["cells"]]
+    # 헤더행(3)이 아니라 실제 번호 body 셀(B5='1. 경영 관리' / C6='1. 사업계획')을 지목
+    assert "B5" in cells and "C6" in cells
+    for c in cells:
+        m = re.match(r"^[A-Z]+([0-9]+)$", c)
+        assert m and int(m.group(1)) > 3, f"헤더행 셀 지목됨: {c}"
+
+
+def test_ambiguous_hierarchy_no_false_positive_wijum():
+    # 위임전결(2-1): 번호가 컬럼따라 깊어짐(최소레벨 증가) → 미발화(오탐 0)
+    s = _summ(EXCEL / "2-1. 위임전결기준표(2026.04.17. 개정).xlsx")
+    for sh in s["sheets"]:
+        assert "ambiguous_hierarchy" not in {f["code"] for f in sh["findings"]}, sh["sheet"]
 
 
 # ── side_by_side 정밀화 회귀 (index중복 OR ≥2 distinct 라벨블록 비겹침 반복만) ──
