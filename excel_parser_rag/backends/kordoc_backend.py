@@ -18,11 +18,13 @@ import shlex
 import subprocess
 import tempfile
 from collections import Counter
+from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import get_column_letter
 
 from ..config import ParserConfig
@@ -60,6 +62,37 @@ def clean_val(t: Any) -> str:
 
 def norm(s: Any) -> str:
     return re.sub(r"\s+", "", str(s)) if s is not None else ""
+
+
+# ─── 날짜 시리얼 보정 (openpyxl 직접 순회, MergedCell 미접근) ─────────
+def _fmt_dt(v):
+    if isinstance(v, datetime) and (v.hour or v.minute or v.second):
+        return v.strftime("%Y-%m-%d %H:%M")
+    return v.strftime("%Y-%m-%d")
+
+
+def _date_map(ws):
+    """시트당 1회 빌드되는 {(row, col): 'YYYY-MM-DD'} 맵.
+
+    MergedCell(병합 비-앵커)은 is_date 속성이 없어 AttributeError 를 내므로
+    isinstance 로 먼저 걸러낸다. is_date 만으로는 time(0,0) 등 datetime/date 가 아닌
+    셀을 '1900-01-01' 로 오포맷할 수 있어 isinstance(value,(datetime,date)) 가드 필수.
+    """
+    out = {}
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell, MergedCell):   # 비-앵커 → is_date 접근 자체 회피
+                continue
+            if cell.is_date and isinstance(cell.value, (datetime, date)):
+                out[(cell.row, cell.column)] = _fmt_dt(cell.value)
+    # 병합범위: 앵커(top-left)에만 값/서식 → 범위 전체로 전파(_fill_vertical 로 끌려온 자식셀도 잡힘)
+    for rng in ws.merged_cells.ranges:
+        a = (rng.min_row, rng.min_col)
+        if a in out:
+            for r in range(rng.min_row, rng.max_row + 1):
+                for c in range(rng.min_col, rng.max_col + 1):
+                    out[(r, c)] = out[a]
+    return out
 
 
 # ─── kordoc .md → grid ───────────────────────────────
@@ -234,7 +267,11 @@ def _looks_multiheader(group_ne, detail_ne) -> bool:
         return False
     if _is_marker_row(detail_ne):                    # 다음 행이 마커(○ 등) 데이터면 헤더 아님
         return False
-    if len(detail_ne) <= len(group_ne):              # 상세 헤더는 더 잘게 나뉜다
+    # 상세행은 '세분화되는 스팬(colspan≥2) 그룹' 수보다 많아야 한다.
+    # rowspan≥2 leaf열(WBSID 등, 아래로 뻗어 detail에 안 나타남)은 세분화 대상이 아니라 제외 —
+    # len(detail)==len(group) 여도(rowspan leaf + 스팬 혼합) 다단헤더를 놓치지 않게 한다.
+    spanning = sum(1 for (_c, _t, cs, _rs, _tag) in group_ne if cs >= 2)
+    if len(detail_ne) <= spanning:                   # 상세 헤더는 스팬을 더 잘게 나눈다
         return False
     single = sum(1 for (_c, _t, cs, _rs, _tag) in detail_ne if cs == 1)
     if single / max(1, len(detail_ne)) < 0.7:        # 상세행은 대부분 1칸
@@ -408,12 +445,15 @@ def _segment(anchors, covered, nrows, ncols):
             hidx, gidx = _pick_header(window)
             if hidx is not None:
                 hcells = seq[hidx][1]
-                cur["header_band"] = _header_band(hcells)
                 if gidx is not None:
+                    # 다단헤더: band 는 그룹행(rowspan leaf열 포함) + 상세행 합집합으로.
+                    # 상세행만 보면 rowspan leaf열(WBSID 등)이 band 밖으로 밀려 drop됨.
+                    cur["header_band"] = _header_band(seq[gidx][1] + hcells)
                     leaf, gmap = _multiheader_maps(seq[gidx][1], hcells)
                     cur["header"] = leaf
                     cur["header_group"] = gmap
                 else:
+                    cur["header_band"] = _header_band(hcells)
                     cur["header"] = {c: t.replace("\n", "").strip() for (c, t, cs, rs, tag) in hcells}
                 i = hidx + 1                          # 헤더 위 메타/제목/범례 행은 drop
                 continue
@@ -443,8 +483,11 @@ def _quality(conf, review, warns):
             "warnings": warns, "parser_version": PARSER_VERSION}
 
 
-def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o):
+def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o, odate,
+           content_cap=2000, embed_cap=3000):
     title = sheet_title or sheet
+    # title==sheet 이면 "자산의 자산 시트" 중복 → "자산 시트" 로 축약
+    sheet_ref = f"{title}의 {sheet} 시트" if title != sheet else f"{sheet} 시트"
     _st, sections = _segment(anchors, covered, nrows, ncols)
     chunks: List[Dict[str, Any]] = []
     for sec in sections:
@@ -461,22 +504,38 @@ def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o):
         def _in_band(c):
             return header_band is None or (header_band[0] <= c <= header_band[1])
 
-        def _key(c):
+        def _label(c):
             leaf = header.get(c) if header else None
             if not leaf:
                 return get_column_letter(c)
             g = header_group.get(c)
             return f"{g}_{leaf}" if g and g != leaf else leaf
 
+        # 중복 라벨(담당자·도입일 등) → 2회차부터 컬럼레터 접미사로 고유화. 섹션당 1회 고정.
+        keymap: Dict[int, str] = {}
+        if header:
+            seen: set = set()
+            for c in sorted(header):
+                base = _label(c)
+                keymap[c] = base if base not in seen else f"{base}({get_column_letter(c)})"
+                seen.add(base)
+
+        def _key(c):
+            return keymap.get(c) or _label(c)
+
         def emit_row(cells, orow, rng, source, review, conf, warns):
+            present = {c: odate.get((orow, c), clean_val(t))
+                       for (c, t, cs, rs, tag) in cells if t.strip() and _in_band(c)}
             if header:
-                fields = {_key(c): clean_val(t) for (c, t, cs, rs, tag) in cells if t.strip() and _in_band(c)}
+                # 헤더 컬럼 전체(빈칸 포함) + 밴드 내 추가값 → 빈 헤더도 헤더="" 로 보존
+                cols = sorted(c for c in (set(header) | set(present)) if _in_band(c))
+                fields = {_key(c): present.get(c, "") for c in cols}
             else:
-                fields = {get_column_letter(c): clean_val(t) for (c, t, cs, rs, tag) in cells if t.strip()}
+                fields = {get_column_letter(c): v for c, v in present.items()}
             if not fields:
                 return
             fld_txt = ", ".join(f"{k}={v}" for k, v in fields.items())
-            content = f"{title}의 {sheet} 시트"
+            content = sheet_ref
             if sec_title:
                 content += f" '{sec_title}' 섹션"
             content += f"에서 다음 값을 가진다: {fld_txt}."
@@ -487,9 +546,9 @@ def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o):
                 "chunk_type": "table_row", "region_type": ("unknown_table" if no_header else "flat_table"),
                 "title": title, "path": path, "fields": fields,
                 "facts": [{"predicate": k, "value": v} for k, v in fields.items()],
-                "content_text": content[:600], "keywords": _kw(title, sec_title, *fields.values()),
+                "content_text": content[:content_cap], "keywords": _kw(title, sec_title, *fields.values()),
                 "source": source,
-                "metadata": {"workbook_title": title, "section": sec_title, "core_text": core[:900], "embedding_text": core[:900]},
+                "metadata": {"workbook_title": title, "section": sec_title, "core_text": core[:embed_cap], "embedding_text": core[:embed_cap]},
                 "quality": _quality(conf, review, warns),
             })
 
@@ -509,18 +568,18 @@ def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o):
             marker_cells = [(c, t.strip()) for (c, t, cs, rs, tag) in cells if is_marker(t) and _in_band(c)]
             text_cells = [(c, t) for (c, t, cs, rs, tag) in cells if t.strip() and not is_marker(t) and _in_band(c)]
             if header and marker_cells:
-                primary_label = header.get(min(header)) if header else None
-                desc = {(header.get(c) or primary_label or get_column_letter(c)): clean_val(t) for (c, t) in text_cells}
+                primary_label = keymap.get(min(header)) if header else None
+                desc = {(keymap.get(c) or primary_label or get_column_letter(c)): clean_val(t) for (c, t) in text_cells}
                 row_label = " > ".join(desc.values()) if desc else f"row{orow}"
                 buckets: Dict[str, List[str]] = {}
                 for (c, t) in marker_cells:
                     bk = MARK_BUCKET.get(t, "해당")
-                    buckets.setdefault(bk, []).append(header.get(c) or get_column_letter(c))
+                    buckets.setdefault(bk, []).append(_key(c))
                 fields = dict(desc)
                 for bk, cl in buckets.items():
                     fields[bk] = ", ".join(cl)
                 grp = "; ".join(f"{bk}: {', '.join(cl)}" for bk, cl in buckets.items())
-                content = f"{title}의 {sheet} 시트에서 '{row_label}' 항목 — {grp}."
+                content = f"{sheet_ref}에서 '{row_label}' 항목 — {grp}."
                 core = (f"title: {title}; path: {' > '.join(path)}; "
                         + "; ".join(f"{k}: {v}" for k, v in fields.items()) + f" -- {sheet} [{rng}]")
                 facts = [{"subject": row_label, "predicate": bk, "object": col}
@@ -529,10 +588,10 @@ def _build(doc, sheet, sheet_title, anchors, covered, nrows, ncols, k2o):
                     "id": f"{doc}::{sheet}::{rng}::matrix", "source_file": doc, "sheet": sheet, "range": rng,
                     "chunk_type": "matrix_fact", "region_type": "matrix_table", "title": title,
                     "path": path + [row_label], "fields": fields, "facts": facts,
-                    "content_text": content[:600],
+                    "content_text": content[:content_cap],
                     "keywords": _kw(title, sec_title, row_label, *[v for cl in buckets.values() for v in cl]),
                     "source": source,
-                    "metadata": {"workbook_title": title, "section": sec_title, "core_text": core[:900], "embedding_text": core[:900]},
+                    "metadata": {"workbook_title": title, "section": sec_title, "core_text": core[:embed_cap], "embedding_text": core[:embed_cap]},
                     "quality": _quality(conf, review, warns),
                 })
             else:
@@ -583,13 +642,17 @@ class KordocBackend:
             ws = wb[sheet]
             acols = max(kncols, ws.max_column)
             k2o = _align_rows(anchors, covered, nrows, acols, ws)
+            odate = _date_map(ws)
             sheet_title, _secs = _segment(anchors, covered, nrows, kncols)
-            all_chunks.extend(_build(doc, sheet, sheet_title, anchors, covered, nrows, kncols, k2o))
+            all_chunks.extend(_build(doc, sheet, sheet_title, anchors, covered, nrows, kncols, k2o, odate,
+                                     content_cap=config.row_content_max_chars,
+                                     embed_cap=config.row_embedding_max_chars))
             sheets_done += 1
 
-        # 십진번호(WBS) 계층 병합 — self-gating(번호 필드 없으면 무변화)
-        from ..chunking.wbs_merger import merge_wbs_rows
-        all_chunks = merge_wbs_rows(all_chunks, max_chars=config.numbering_merge_max_chars)
+        # CGH 계층 병합 — self-gating(번호 spine 없으면 무변화). 모든 내부노드가
+        # 직속 자식 아웃라인을 품는 hierarchy_node 요약청크를 발행한다.
+        from ..chunking.hierarchy_tree import merge_hierarchy_rows
+        all_chunks = merge_hierarchy_rows(all_chunks, max_chars=config.numbering_merge_max_chars)
 
         ct = Counter(c["chunk_type"] for c in all_chunks)
         rt = Counter(c["region_type"] for c in all_chunks)
