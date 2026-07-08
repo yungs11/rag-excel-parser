@@ -57,9 +57,9 @@ def test_jikmu_task_names_survive_as_items():
     blob = "\n".join(c["content_text"] for c in deleg)
     # 업무내용 태스크명이 항목으로 등장(구분 그룹으로 붕괴되지 않음)
     assert "연간 사업계획" in blob, "업무내용 태스크명(연간 사업계획)이 항목에서 소실"
-    # 해당 태스크의 전결권자(CEO)가 매핑됨
-    assert "연간 사업계획: 전결권자 CEO" in blob.replace("  ", " "), (
-        "연간 사업계획 → CEO 매핑 실패"
+    # 해당 태스크의 CEO 열이 header:값(CEO:○)으로 매핑됨
+    assert "연간 사업계획: CEO:○" in blob.replace("  ", " "), (
+        "연간 사업계획 → CEO:○ 매핑 실패"
     )
 
 
@@ -103,10 +103,11 @@ def test_full_width_banner_not_emitted_as_rule():
     cfg.chunk_profiles = ["delegation_rule", "note", "code_mapping"]
     chunks, _ = get_backend("openpyxl").parse(JIKMU, cfg)
     deleg = [c for c in chunks if c["chunk_type"] == "delegation_rule"]
-    # glitch signature: 비고(또는 다른 메타) 값이 그 행의 항목과 동일
+    # glitch signature(header:값): 그 행의 항목 텍스트가 자기 '값'(header:값 매핑) 안에 echo 됨
+    # = 전폭 배너가 값 열로 퍼진 흔적. (정상 값은 ○/보고/비고문구 — 항목명을 포함하지 않음.)
     glitch = [
         c for c in deleg
-        if _c(str(c.get("fields", {}).get("비고", ""))) == _c(str(c.get("fields", {}).get("항목", "")))
-        and c.get("fields", {}).get("항목")
+        if (item := _c(str(c.get("fields", {}).get("항목", ""))))
+        and item in _c(str(c.get("fields", {}).get("값", "")))
     ]
     assert not glitch, f"배너 glitch 청크 {len(glitch)}건: {[c['content_text'][:60] for c in glitch[:3]]}"

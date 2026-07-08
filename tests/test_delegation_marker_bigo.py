@@ -25,9 +25,9 @@ def test_report_marker_captured():
            and "나. 월간" in (c.get("content_text") or "")]
     assert hit, "경영실적>나.월간 그룹 없음"
     txt = hit[0].get("content_text") or ""
-    assert "부문장" in txt, f"나.월간 전결권자 부문장 누락: {txt}"
-    # '보고 CEO' 는 relations(fields['관계']) 에서만 나오는 연속 문자열(path/다른행 오탐 차단).
-    assert "보고 CEO" in txt, f"CEO 보고 관계 미캡처: {txt}"
+    # header:값 형식 — 부문장:○(전결) + CEO:보고(비-○). 마커 해석 없이 원문.
+    assert "부문장:○" in txt, f"부문장:○ 누락: {txt}"
+    assert "CEO:보고" in txt, f"CEO:보고 미캡처: {txt}"
 
 
 @pytest.mark.skipif(not JIKMU.exists(), reason="직무전결 원본 없음")

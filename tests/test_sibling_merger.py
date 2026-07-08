@@ -6,11 +6,12 @@ from excel_parser_rag.chunking.sibling_merger import merge_sibling_rules
 
 
 def _rule(row, path, approvers, *, region_id="r1", extra=None):
-    fields = {"항목": path[-1], "경로": " > ".join(path), "전결권자": list(approvers)}
+    fields = {"항목": path[-1], "경로": " > ".join(path),
+              "값": ", ".join(f"{a}:○" for a in approvers)}
     if extra:
         fields.update(extra)
-    facts = [{"predicate": "전결권자", "value": a} for a in approvers]
-    content = f"S1 시트에서 '{' > '.join(path)}' 항목의 전결권자는 {', '.join(approvers)}이다."
+    facts = [{"predicate": a, "value": "○"} for a in approvers]
+    content = f"S1 시트에서 '{' > '.join(path)}' 항목: " + ", ".join(f"{a}:○" for a in approvers)
     return RagChunk(
         source_file="doc.xlsx", sheet="S1", range=f"B{row}:I{row}",
         chunk_type="delegation_rule", region_type="hierarchical_matrix",
